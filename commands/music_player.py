@@ -14,7 +14,6 @@ import audioop
 from discord import (
     AudioSource,
     ClientException,
-    FFmpegOpusAudio,
     FFmpegPCMAudio,
     Guild,
     Member,
@@ -25,6 +24,8 @@ from discord import (
 from discord.ext import commands
 
 from asyncio.subprocess import create_subprocess_exec, PIPE
+
+from discord.ext.commands.bot import Bot
 
 
 @attrs(auto_attribs=True)
@@ -57,6 +58,7 @@ class Track:
 
     streaming_url: str | None = attrib(repr=False, default=None)
     memoized_stream: SeekableAudioSource | None = attrib(init=False, default=None)
+    already_played: bool = attrib(repr=False, default=False)
     stream_timestamp: float = attrib(init=False, repr=False, default=0.0)
 
     @classmethod
@@ -118,7 +120,7 @@ class Track:
                     duration=metadata.get("duration"),
                     requested_by=requested_by,
                 )
-        except:
+        except Exception as _:
             logger.error("Incomplete data returned, missing URL")
             raise RuntimeError("yt-dlp returned incomplete data")
 
@@ -163,11 +165,13 @@ class Track:
         if (
             self.memoized_stream is not None
             and self.stream_timestamp - perf_counter() < 3600
+            and not self.already_played
         ):
             return self.memoized_stream
 
         await self.fetch_source()
         assert self.memoized_stream is not None
+        self.already_played = False
 
         return self.memoized_stream
 
@@ -195,6 +199,7 @@ class MusicPlaying(commands.Cog):
             LoopCurrent = 1
             LoopQueue = 2
 
+        bot: Bot
         guild: Guild
         backreport_channel: TextChannel
         voice_client: VoiceClient
@@ -202,6 +207,7 @@ class MusicPlaying(commands.Cog):
         history: Deque[Track] = attrib(init=False, factory=Deque)
         now_playing: Track | None = attrib(init=False, default=None)
         queue: Deque[Track] = attrib(init=False, factory=Deque)
+        queue_lock: aio.Lock = attrib(init=False, factory=aio.Lock)
         player_task: aio.Task[None] | None = attrib(init=False, default=None)
         next_song_event: aio.Event = attrib(init=False, factory=aio.Event)
         cur_source: SeekableAudioSource | None = attrib(init=False, default=None)
@@ -214,68 +220,87 @@ class MusicPlaying(commands.Cog):
             return logging.getLogger(f"GuildState[{self.guild.id}]")
 
         def on_song_end_cb(self, err):
-            self.now_playing = None
-            self.next_song_event.set()
+            loop = self.bot.loop
 
-            # TODO: Update DB history
 
-            if err:
-                # This _should_ be the same song as we tried to play,
-                #   but we failed, so we remove it from history
-                self.history.pop()
-                self.logger.error(f"Err on play: {err}")
+            def _handle_end():
+                self.now_playing = None
 
-                aio.create_task(
-                    self.backreport_channel.send(f"Error during play: {err}")
-                )
-                aio.create_task(self.stop())
+                if not self.next_song_event.is_set():
+                    self.next_song_event.set()
+
+                if err:
+                    if self.history:
+                        self.history.pop()
+
+                    self.logger.error(f"Err on play: {err}")
+
+                    aio.create_task(
+                        self.backreport_channel.send(f"Error during play: {err}")
+                    )
+                    aio.create_task(self.stop())
+                    aio.create_task(self.disconnect())
+
+            loop.call_soon_threadsafe(_handle_end)
+
+
 
         async def song_player_task(self):
-            if not self.queue:
-                return
-
-            next_track = self.queue.popleft()
-
-            try:
-                source = await next_track.get_stream()
-            except Exception as e:
-                await self.backreport_channel.send(
-                    f"Unable to obtain audio for {next_track.title} ({next_track.webpage_url}), error: {e}, skipping..."
+            """
+            main loop of the song player
+            awaits the event next_song_event to play the next song
+            """
+            while True:
+                next_track = None
+                if not self.queue:
+                    return
+                async with self.queue_lock:
+                    next_track = self.queue.popleft()
+                
+                try:
+                    source = await next_track.get_stream()
+                except Exception as e:
+                    await self.backreport_channel.send(
+                        f"Unable to obtain audio for {next_track.title} ({next_track.webpage_url}), error: {e}, skipping..."
+                    )
+                    continue
+                else:
+                    self.cur_source = source
+                
+                self.voice_client.play(
+                    source,
+                    bitrate=192,
+                    application="audio",
+                    signal_type="music",
+                    after=self.on_song_end_cb,
                 )
-                return
-            else:
-                self.cur_source = source
-
-            self.voice_client.play(
-                source,
-                bitrate=192,
-                application="audio",
-                signal_type="music",
-                after=self.on_song_end_cb,
-            )
-            self.now_playing = next_track
-            self.history.append(next_track)
-
-            await self.backreport_channel.send(
-                f"Playing {next_track.title} ({next_track.webpage_url}), requested by {next_track.requested_by.display_name}."
-            )
-
-            prefetch_track = None
-            if self.queue:
-                prefetch_track = self.queue[0]
-                aio.create_task(prefetch_track.fetch_source())
-
-            await self.next_song_event.wait()
-            self.voice_client.stop()
-            self.next_song_event.clear()
-
-            match (self.loop_mode):
-                case self.LoopMode.NoLoop:
-                    ...
-                case self.LoopMode.LoopCurrent:
-                    self.queue.appendleft(next_track)
-                case self.LoopMode.LoopQueue:
-                    self.queue.append(next_track)
+                self.now_playing = next_track
+                self.history.append(next_track)
+                
+                await self.backreport_channel.send(
+                    f"Playing {next_track.title} ({next_track.webpage_url}), requested by {next_track.requested_by.display_name}."
+                )
+                
+                prefetch_track = None
+                if self.queue:
+                    async with self.queue_lock:
+                        prefetch_track = self.queue[0]
+                        aio.create_task(prefetch_track.fetch_source())
+                
+                await self.next_song_event.wait()
+                next_track.already_played = True
+                self.next_song_event.clear()
+                while self.voice_client.is_playing():
+                    await aio.sleep(0.05)
+                match (self.loop_mode):
+                    case self.LoopMode.NoLoop:
+                        ...
+                    case self.LoopMode.LoopCurrent:
+                        async with self.queue_lock:
+                            self.queue.appendleft(next_track)
+                    case self.LoopMode.LoopQueue:
+                        async with self.queue_lock:
+                            self.queue.append(next_track)
 
         async def start(self):
             if self.player_task is not None:
@@ -293,12 +318,14 @@ class MusicPlaying(commands.Cog):
             self.player_task.add_done_callback(_)
 
         async def stop(self):
-            aio.create_task(self.voice_client.disconnect(force=True))
 
             if self.player_task is None:
                 return
 
             self.player_task.cancel()
+
+        async def disconnect(self):
+            aio.create_task(self.voice_client.disconnect(force=True))
 
     guild_players: Dict[int, Player] = attrib(init=False, factory=dict, hash=False)
 
@@ -325,7 +352,7 @@ class MusicPlaying(commands.Cog):
 
         try:
             player = self.get_player(ctx.guild)
-        except:
+        except Exception as _:
             await text_channel.send("Must join first.")
             return None
 
@@ -353,13 +380,13 @@ class MusicPlaying(commands.Cog):
             voice_client = await voice_channel.connect(timeout=5.0, reconnect=True)
         except aio.TimeoutError:
             # Log timeout error here
-            self.logger.error("Timeout error when trying to join VC.")
+            self.logger().error("Timeout error when trying to join VC.")
             return
         except ClientException:
             return
 
         if ctx.guild.id not in self.guild_players:
-            new_player = self.Player(ctx.guild, text_channel, voice_client)
+            new_player = self.Player(ctx.bot, ctx.guild, text_channel, voice_client)
             self.guild_players[ctx.guild.id] = new_player
 
     @commands.command()
@@ -376,7 +403,7 @@ class MusicPlaying(commands.Cog):
 
         try:
             player = self.get_player(ctx.guild)
-        except:
+        except Exception as _:
             if ctx.guild.voice_client is not None:
                 await text_channel.send(
                     "Leaving VC even though we should not be present there to begin with... this is a bug"
@@ -387,6 +414,7 @@ class MusicPlaying(commands.Cog):
             return
 
         await player.stop()
+        await player.disconnect()
         del self.guild_players[ctx.guild.id]
 
         await text_channel.send("Left VC")
@@ -409,14 +437,16 @@ class MusicPlaying(commands.Cog):
             return
 
         if isinstance(result, Sequence):
-            player.queue.extend(result)
+            async with player.queue_lock:
+                player.queue.extend(result)
             await player.start()
 
             await text_channel.send(
                 f"Added {len(result)} songs to the queue, requested by {invoker.display_name}."
             )
         else:
-            player.queue.append(result)
+            async with player.queue_lock:
+                player.queue.append(result)
             await player.start()
 
             await text_channel.send(
@@ -444,13 +474,15 @@ class MusicPlaying(commands.Cog):
             await text_channel.send(
                 f"Added {len(result)} songs to the queue to play next, requested by {invoker.display_name}."
             )
-            player.queue.extendleft(result)
+            async with player.queue_lock:
+                player.queue.extendleft(result)
             await player.start()
         else:
             await text_channel.send(
                 f"Added {result.title} to the queue to play next, requested by {invoker.display_name}"
             )
-            player.queue.appendleft(result)
+            async with player.queue_lock:
+                player.queue.appendleft(result)
             await player.start()
 
     @commands.command(aliases=["prev"])
@@ -513,7 +545,7 @@ class MusicPlaying(commands.Cog):
             return
 
         skip_from = 0
-        skip_to = 1
+        skip_to = -1
 
         try:
             if not to_skip_str:
@@ -524,13 +556,13 @@ class MusicPlaying(commands.Cog):
                     if skip_from < 0:
                         raise ValueError
                     skip_to = skip_from + 1
-                except:
+                except Exception as _:
                     skip_from, skip_to = map(int, to_skip_str.split("-"))
                     if skip_from < 1 or skip_to < 1 or skip_from >= skip_to:
                         raise ValueError
                     skip_from -= 1
                     skip_to += 1
-        except:
+        except Exception as _:
             await text_channel.send("Invalid argument")
             return
 
@@ -538,20 +570,21 @@ class MusicPlaying(commands.Cog):
             await text_channel.send("Nothing to skip.")
             return
 
-        new_queue = [*player.queue]
-        try:
-            del new_queue[skip_from:skip_to]
-        except:
-            await text_channel.send("Trying to skip non-existent entries")
-            return
-
-        player.queue.clear()
-        player.queue.extend(new_queue)
-        await player.start()
-
-        if skip_from == 0:
-            # We've skipped current song
-            player.next_song_event.set()
+        async with player.queue_lock:
+            new_queue = [*player.queue]
+            try:
+                if skip_to != -1:
+                    del new_queue[skip_from:skip_to]
+            except Exception as _:
+                await text_channel.send("Trying to skip non-existent entries")
+                return
+            player.voice_client.stop()
+            player.queue.clear()
+            player.queue.extend(new_queue)
+            
+            if skip_from == 0:
+                # We've skipped current song
+                player.next_song_event.set()
 
     @commands.command()
     @commands.guild_only()
