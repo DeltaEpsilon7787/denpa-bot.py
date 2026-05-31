@@ -2,7 +2,9 @@ import datetime
 from enum import Enum
 from io import StringIO
 import json
+from subprocess import STDOUT
 from time import perf_counter
+from types import TracebackType
 
 from attr import attrib, attrs
 from typing import Deque, Dict, List, Literal, Self, Sequence, Tuple
@@ -149,11 +151,13 @@ class Track:
                 logging.getLogger("yt-dlp").exception("Failed to start yt-dlp")
                 raise e
 
-            assert process.stdout is not None
+            if err := process.stderr:
+                return (await err.read()).decode("utf-8")
 
+            assert process.stdout is not None
             result = json.loads((await process.stdout.read()).decode("utf-8"))
             self.streaming_url = result["url"]
-
+            
         assert self.streaming_url is not None
         real_source = FFmpegPCMAudio(self.streaming_url)
         source = SeekableAudioSource(real_source)
@@ -167,23 +171,26 @@ class Track:
             and self.stream_timestamp - perf_counter() < 3600
             and not self.already_played
         ):
-            return self.memoized_stream
+            return self.memoized_stream, None
 
-        await self.fetch_source()
+        if err := await self.fetch_source():
+            return (None ,err) 
+
         assert self.memoized_stream is not None
         self.already_played = False
 
-        return self.memoized_stream
+        return self.memoized_stream, None
 
     async def seek(self, seek_time=0.0):
         target = await self.get_stream()
+        assert target[1] is None
         assert self.streaming_url is not None
 
         # Live replace of source is fairly dangerous, but...
-        target.real_source = FFmpegPCMAudio(
+        target[0].real_source = FFmpegPCMAudio(
             self.streaming_url, before_options=f"-ss {seek_time}"
         )
-        target.play_location = seek_time
+        target[0].play_location = seek_time
 
 
 @attrs(auto_attribs=True, hash=True)
@@ -258,7 +265,7 @@ class MusicPlaying(commands.Cog):
                     next_track = self.queue.popleft()
                 
                 try:
-                    source = await next_track.get_stream()
+                    source,err = await next_track.get_stream()
                 except Exception as e:
                     await self.backreport_channel.send(
                         f"Unable to obtain audio for {next_track.title} ({next_track.webpage_url}), error: {e}, skipping..."
@@ -266,7 +273,11 @@ class MusicPlaying(commands.Cog):
                     continue
                 else:
                     self.cur_source = source
-                
+
+                if err:
+                    await self.backreport_channel.send(err)
+
+                assert source
                 self.voice_client.play(
                     source,
                     bitrate=192,
@@ -748,6 +759,12 @@ class MusicPlaying(commands.Cog):
 
         while next_ := response.read(2000):
             await text_channel.send(next_)
+
+    @commands.command()
+    async def version(self, ctx: commands.Context):
+        process = await create_subprocess_exec("yt-dlp", "--version", stdout=PIPE, stderr=PIPE)
+        assert process.stdout is not None
+        await ctx.reply((await process.stdout.read()).decode("utf-8"))
 
 
 async def setup(bot):
