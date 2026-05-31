@@ -151,7 +151,7 @@ class Track:
                 logging.getLogger("yt-dlp").exception("Failed to start yt-dlp")
                 raise e
 
-            if err := process.stderr:
+            if err := (await process.stderr.read()).decode("utf-8"):
                 return (await err.read()).decode("utf-8")
 
             assert process.stdout is not None
