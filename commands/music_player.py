@@ -16,18 +16,22 @@ import audioop
 from discord import (
     AudioSource,
     ClientException,
+    Embed,
     FFmpegPCMAudio,
     Guild,
     Member,
     TextChannel,
     VoiceChannel,
     VoiceClient,
+    channel,
 )
 from discord.ext import commands
 
 from asyncio.subprocess import create_subprocess_exec, PIPE
 
 from discord.ext.commands.bot import Bot
+
+from models.reply_embeds import ReplyEmbed
 
 
 @attrs(auto_attribs=True)
@@ -744,6 +748,52 @@ class MusicPlaying(commands.Cog):
 
         await text_channel.send("\n".join(queue_text_segments))
 
+    @commands.command(aliases=["h", "hist"])
+    @commands.guild_only()
+    async def history(self, ctx: commands.Context, *, page: int | None):
+        HISTORY_LENGTH = 10
+
+        assert ctx.guild is not None
+
+        if (triplet := await self.vc_guard(ctx)) is not None:
+            _, text_channel, player = triplet
+        else:
+            return
+
+
+        page = 1 if page is None else page
+        if page < 1:
+            await text_channel.send("Invalid page number.")
+            return
+
+        page -= 1
+
+        historyEmbed = ReplyEmbed(
+                title="Song History"
+                )
+
+        _history = list(reversed(player.history)) # delta made history upside down
+        # empty check
+        if len(_history) == 0:
+            await text_channel.send(embed=ReplyEmbed(title="emty!!"))
+            return
+
+        _desc = ""
+
+        for i, track in enumerate(_history[page*HISTORY_LENGTH:page*HISTORY_LENGTH+HISTORY_LENGTH]):
+            # add a field for each song between page * defined length to page * defined length + 10
+            _desc += f"{"current" if i == 0 else i}: [{track.title}]({track.webpage_url})\n"
+
+
+        if len(_history) > page*HISTORY_LENGTH+HISTORY_LENGTH:
+            # description will be number off songs after this page
+            _desc += f"and {len(_history) - page*HISTORY_LENGTH+HISTORY_LENGTH} more!"
+
+        historyEmbed.set_description(_desc)
+
+        await text_channel.send(embed=historyEmbed)
+        
+
     @commands.command()
     @commands.guild_only()
     async def debug(self, ctx: commands.Context):
@@ -759,6 +809,19 @@ class MusicPlaying(commands.Cog):
 
         while next_ := response.read(2000):
             await text_channel.send(next_)
+
+
+    @commands.command()
+    @commands.guild_only()
+    async def debug2(self, ctx: commands.Context):
+        assert ctx.guild is not None
+
+        if (triplet := await self.vc_guard(ctx)) is not None:
+            _, text_channel, player = triplet
+        else:
+            return
+
+        await text_channel.send(str(list(player.history)))
 
     @commands.command()
     async def version(self, ctx: commands.Context):
