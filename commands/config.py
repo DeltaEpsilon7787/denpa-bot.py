@@ -4,6 +4,7 @@ from discord import Embed
 from discord.ext import commands
 
 from base.config import Config, GuildConfig
+from models.reply_embeds import ReplyEmbed
 
 
 class ConfigCommand(commands.Cog):
@@ -61,10 +62,10 @@ class ConfigCommand(commands.Cog):
 
         return b
 
-    def help(self, cfg: GuildConfig, args) -> Embed:
+    def help(self, cfg: GuildConfig, args) -> ReplyEmbed:
         args = args[0].lower() if args else ""
 
-        _embed = Embed(color=0x0099FF, description=" ", title="admin config menu")
+        _embed = ReplyEmbed(description=" ", title="admin config menu")
 
         if args == "":
             _embed.description = "use with args below to show more info"

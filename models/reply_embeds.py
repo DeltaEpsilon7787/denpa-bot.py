@@ -4,8 +4,14 @@ from discord import Colour
 from discord.embeds import Embed
 from discord.types.embed import EmbedType
 
+# TODO: move this to database config
 
-COLOR = 0x0099ff
+COLOR = 0xcf8875 # cotton candy pink
+TITLE = "とろ美 𝓁𝑜𝓋𝑒'𝓈 𝓎𝑜𝓊"
+FOOTER = (
+        "とろ美( ⑅˃̵o˂̵⑅ )", # footer name
+        "https://cdn.discordapp.com/attachments/1090086858635096086/1515950801833689209/Iy3G2hIhxL_oidNSwogJYgZhkMYS_44XOiv3YFUZFjalGk2S4USGz9IDTjKBAz1W2EvD2uEt-As900-c-k-c0x00ffffff-no-rj.png?ex=6a30deb4&is=6a2f8d34&hm=82bc28a1d2bb03ed82fa7303abc12a854ca85496a1227a13f0643a8b2667fcfe&" # footer icon
+        )
 
 class ReplyEmbed(Embed):
     '''
@@ -20,16 +26,16 @@ class ReplyEmbed(Embed):
         *,
         colour: Optional[Union[int, Colour]] = COLOR,
         color: Optional[Union[int, Colour]] = COLOR,
-        title: Optional[Any] = None,
+        title: Optional[Any] = TITLE,
         type: EmbedType = 'rich',
         url: Optional[Any] = None,
         description: Optional[Any] = None,
         timestamp: Optional[datetime.datetime] = datetime.datetime.now(),
-        author: Optional[tuple[str, Optional[str], Optional[str]]] = ("とろ美( ⑅˃̵o˂̵⑅ )",None,None),
+        footer: Optional[tuple[Optional[str], Optional[str]]] = FOOTER
         ):
         super().__init__(colour=colour, color=color, title=title, type=type, url=url, description=description, timestamp=timestamp)
-        if author:
-            self.set_author(name=author[0],url=author[1],icon_url=author[2])
+        if footer:
+            self.set_footer(text=footer[0], icon_url=footer[1])
         
 
     def set_color(self, color) -> "ReplyEmbed":
