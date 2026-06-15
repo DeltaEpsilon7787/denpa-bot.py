@@ -1,5 +1,6 @@
 import time
 import logging
+import os
 from discord.ext import tasks
 from discord.ext.commands import Bot, Cog
 
@@ -20,6 +21,9 @@ class Heartbeat(Cog):
 
     @tasks.loop(seconds=30)
     async def heartbeat(self):
+        if os.name == "nt":
+            return
+
         with open("/tmp/health", "w") as f:
             f.write(str(int(time.time())))
 
