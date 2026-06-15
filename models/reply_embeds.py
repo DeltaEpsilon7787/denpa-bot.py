@@ -24,9 +24,12 @@ class ReplyEmbed(Embed):
         type: EmbedType = 'rich',
         url: Optional[Any] = None,
         description: Optional[Any] = None,
-        timestamp: Optional[datetime.datetime] = None,
+        timestamp: Optional[datetime.datetime] = datetime.datetime.now(),
+        author: Optional[tuple[str, Optional[str], Optional[str]]] = ("とろ美( ⑅˃̵o˂̵⑅ )",None,None),
         ):
         super().__init__(colour=colour, color=color, title=title, type=type, url=url, description=description, timestamp=timestamp)
+        if author:
+            self.set_author(name=author[0],url=author[1],icon_url=author[2])
         
 
     def set_color(self, color) -> "ReplyEmbed":
