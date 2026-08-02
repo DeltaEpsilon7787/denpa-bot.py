@@ -51,10 +51,6 @@ class ConfigCommand(commands.Cog):
             b += "- cfg.koko_role is not set. (;;toromi role rainbow)\n"
             err_count += 1
 
-        if len(cfg.default_roles) == 0:
-            b += "- cfg.default_roles is empty. (;;toromi auto-role)\n"
-            err_count += 1
-
         b += "### Summary\n"
         b += f"{err_count} issues detected. ;;toromi will run "
         b += "in a degraded state." if err_count else "as expected."
@@ -89,9 +85,6 @@ class ConfigCommand(commands.Cog):
         report = "FIXME(kajo): this message should have been overwritten"
 
         match args:
-            case ["default_roles", *roles]:
-                cfg.default_roles = list(map(lambda s: int(s), roles))
-                report = f"set cfg.default_roles to {cfg.default_roles}"
 
             case [field, value]:
                 try:
