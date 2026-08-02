@@ -327,6 +327,7 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7a/1d/29d32e0fb40864b1f878c7f5a0b343ae676c6e2b271a2d55cc3a152391da/charset_normalizer-3.4.7-cp314-cp314t-win_amd64.whl", hash = "sha256:03853ed82eeebbce3c2abfdbc98c96dc205f32a79627688ac9a27370ea61a49c", size = 174168, upload-time = "2026-04-02T09:27:49.795Z" },
     { url = "https://files.pythonhosted.org/packages/de/32/d92444ad05c7a6e41fb2036749777c163baf7a0301a040cb672d6b2b1ae9/charset_normalizer-3.4.7-cp314-cp314t-win_arm64.whl", hash = "sha256:c35abb8bfff0185efac5878da64c45dafd2b37fb0383add1be155a763c1f083d", size = 153018, upload-time = "2026-04-02T09:27:51.116Z" },
     { url = "https://files.pythonhosted.org/packages/db/8f/61959034484a4a7c527811f4721e75d02d653a35afb0b6054474d8185d4c/charset_normalizer-3.4.7-py3-none-any.whl", hash = "sha256:3dce51d0f5e7951f8bb4900c257dad282f49190fdbebecd4ba99bcc41fef404d", size = 61958, upload-time = "2026-04-02T09:28:37.794Z" },
+<<<<<<< HEAD
 ]
 
 [[package]]
@@ -372,6 +373,8 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/43/c1/f2aa9e77608077336e3e42ef2e4b82044f41cf52d448ee5210737e6654c5/davey-0.1.6-cp314-cp314t-musllinux_1_2_armv7l.whl", hash = "sha256:418bad5cc8ac4b94f7970583747ab052c38e842ae272ff5befd1df2a7746ee64", size = 1103011, upload-time = "2026-06-22T01:22:06.88Z" },
     { url = "https://files.pythonhosted.org/packages/fd/50/9849b58856e8f015c82cc9b23b0cb4120c381080913ceaddc37123d02ccb/davey-0.1.6-cp314-cp314t-musllinux_1_2_i686.whl", hash = "sha256:844bb81a743ba38aa3d35bc8a91d8542d71ce4ab9175da19088a94449fa20944", size = 1134726, upload-time = "2026-06-22T01:22:21.525Z" },
     { url = "https://files.pythonhosted.org/packages/1b/1c/e74482b963524e60184a061d4a61ff81943e35daa76fdfbe964745cdf663/davey-0.1.6-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:285dffb4353bf7e4d92b5d638a9fb0abe97d67ab0f4282795b5c1cde55340598", size = 1127602, upload-time = "2026-06-22T01:22:37.01Z" },
+=======
+>>>>>>> 24cea7efa067113cff178e8fc4670f544ef3205d
 ]
 
 [[package]]

@@ -23,13 +23,11 @@ from discord import (
     VoiceChannel,
     VoiceClient,
 )
-from discord.app_commands import command
 from discord.ext import commands
 
 from asyncio.subprocess import create_subprocess_exec, PIPE
 
 from discord.ext.commands.bot import Bot
-from discord.ext.commands.core import guild_only
 
 from models.reply_embeds import ReplyEmbed
 
@@ -746,7 +744,6 @@ class MusicPlaying(commands.Cog):
 
             for i, track in enumerate(queue_list[:10], start=2):
                 queue_text_segments.append(make_queue_line(track, i))
-
         else:
             queue_list = [*player.queue]
 
@@ -823,7 +820,6 @@ class MusicPlaying(commands.Cog):
 
         await text_channel.send(embed=ReplyEmbed(description="Shuffled songs in the queue"))
 
-        
 
     @commands.command()
     @commands.guild_only()
