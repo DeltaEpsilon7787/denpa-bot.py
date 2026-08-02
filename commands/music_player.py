@@ -2,9 +2,9 @@ import datetime
 from enum import Enum
 from io import StringIO
 import json
-from subprocess import STDOUT
+from math import ceil
 from time import perf_counter
-from types import TracebackType
+import random
 
 from attr import attrib, attrs
 from typing import Deque, Dict, List, Literal, Self, Sequence, Tuple
@@ -16,20 +16,20 @@ import audioop
 from discord import (
     AudioSource,
     ClientException,
-    Embed,
     FFmpegPCMAudio,
     Guild,
     Member,
     TextChannel,
     VoiceChannel,
     VoiceClient,
-    channel,
 )
+from discord.app_commands import command
 from discord.ext import commands
 
 from asyncio.subprocess import create_subprocess_exec, PIPE
 
 from discord.ext.commands.bot import Bot
+from discord.ext.commands.core import guild_only
 
 from models.reply_embeds import ReplyEmbed
 
@@ -718,8 +718,9 @@ class MusicPlaying(commands.Cog):
             return
 
         queue_text_segments = []
+        per_page = 10
 
-        def make_queue_line(track: Track, track_num: int):
+        def make_queue_line(track: Track, track_num: int) -> str:
             if track.duration:
                 dur_string = dur_string = (
                     f"{datetime.timedelta(seconds=int(track.duration))}"
@@ -727,8 +728,16 @@ class MusicPlaying(commands.Cog):
                 if track.duration < 3600:
                     dur_string = dur_string.removeprefix("0:")
 
-                return f"{track_num}. {track.title} ({dur_string}): ({track.requested_by.display_name})"
-            return f"{track_num}. {track.title}: ({track.requested_by.display_name})"
+                return f"{track_num + per_page * page}: [{track.title}]({track.webpage_url}) ~ {dur_string} ~ {track.requested_by.mention}"
+
+            return f"{track_num + per_page * page}: [{track.title}]({track.webpage_url}) ~ {track.requested_by.mention}"
+
+        _embed = ReplyEmbed(
+                title="Queue"
+                ).add_field(
+                        name="",
+                        value=f"page: {page}/{max(ceil(len(player.queue) / per_page),1)}",
+                        )
 
         if page == 1 and player.now_playing is not None:
             queue_text_segments.append(make_queue_line(player.now_playing, 1))
@@ -737,6 +746,7 @@ class MusicPlaying(commands.Cog):
 
             for i, track in enumerate(queue_list[:10], start=2):
                 queue_text_segments.append(make_queue_line(track, i))
+
         else:
             queue_list = [*player.queue]
 
@@ -746,7 +756,13 @@ class MusicPlaying(commands.Cog):
             ):
                 queue_text_segments.append(make_queue_line(track, i))
 
-        await text_channel.send("\n".join(queue_text_segments))
+        if not queue_text_segments:
+            await text_channel.send("emty!!")
+            return
+
+        _embed.set_description("\n".join(queue_text_segments))
+
+        await text_channel.send(embed=_embed)
 
     @commands.command(aliases=["h", "hist"])
     @commands.guild_only()
@@ -792,6 +808,21 @@ class MusicPlaying(commands.Cog):
         historyEmbed.set_description(_desc)
 
         await text_channel.send(embed=historyEmbed)
+
+    @commands.command()
+    @commands.guild_only()
+    async def shuffle(self, ctx: commands.Context):
+        assert ctx.guild
+        if (triplet := await self.vc_guard(ctx)) is not None:
+            _, text_channel, player = triplet
+        else:
+            return
+
+        async with player.queue_lock:
+            random.shuffle(player.queue)
+
+        await text_channel.send(embed=ReplyEmbed(description="Shuffled songs in the queue"))
+
         
 
     @commands.command()
