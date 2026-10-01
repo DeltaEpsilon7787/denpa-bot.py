@@ -1,18 +1,19 @@
+import asyncio as aio
 import datetime
+import json
+import logging
+import random
+from asyncio.subprocess import PIPE, create_subprocess_exec
+from collections import deque
+from collections.abc import Sequence
 from enum import Enum
 from io import StringIO
-import json
 from math import ceil
 from time import perf_counter
-import random
-
-from attr import attrib, attrs
-from typing import Deque, Dict, List, Literal, Self, Sequence, Tuple
-import asyncio as aio
-
-import logging
+from typing import Literal, Self
 
 import audioop
+from attr import attrib, attrs
 from discord import (
     AudioSource,
     ClientException,
@@ -24,9 +25,6 @@ from discord import (
     VoiceClient,
 )
 from discord.ext import commands
-
-from asyncio.subprocess import create_subprocess_exec, PIPE
-
 from discord.ext.commands.bot import Bot
 
 from models.reply_embeds import ReplyEmbed
@@ -36,14 +34,14 @@ from models.reply_embeds import ReplyEmbed
 class SeekableAudioSource(AudioSource):
     real_source: FFmpegPCMAudio = attrib(repr=False)
     volume: float = 1.0  # Volume, 0 to 2
-    
-    play_location: float = 0.0 # Where are we roughly playing at?
+
+    play_location: float = 0.0  # Where are we roughly playing at?
 
     def read(self):
         result = self.real_source.read()
-        
+
         self.play_location += 0.02
-        
+
         return audioop.mul(result, 2, self.volume)
 
     def is_opus(self) -> bool:
@@ -61,12 +59,19 @@ class Track:
     requested_by: Member = attrib(repr=False)
 
     streaming_url: str | None = attrib(repr=False, default=None)
-    memoized_stream: SeekableAudioSource | None = attrib(init=False, default=None)
+    memoized_stream: SeekableAudioSource | None = attrib(
+                                                        init=False,
+                                                        default=None
+                                                        )
     already_played: bool = attrib(repr=False, default=False)
     stream_timestamp: float = attrib(init=False, repr=False, default=0.0)
 
     @classmethod
-    async def try_from_url(cls, url: str, requested_by: Member) -> Self | List[Self]:
+    async def try_from_url(
+            cls,
+            url: str,
+            requested_by: Member
+            ) -> Self | list[Self]:
         logger = logging.getLogger("yt-dlp")
 
         try:
@@ -86,9 +91,9 @@ class Track:
                 stdout=PIPE,
                 stderr=PIPE,
             )
-        except Exception as e:
+        except Exception:
             logging.getLogger("yt-dlp").exception("Failed to start yt-dlp")
-            raise e
+            raise
 
         assert process.stdout is not None
         assert process.stderr is not None
@@ -100,7 +105,8 @@ class Track:
             logger.error(f"Error while running yt-dlp: {error_dump}")
             raise RuntimeError("yt-dlp error", error_dump)
 
-        # To determine if this is a playlist, we just check if `entries` exist or not.
+        # To determine if this is a playlist,
+        # we just check if `entries` exist or not.
         metadata = json.loads(output)
         is_playlist = "entries" in metadata
 
@@ -124,7 +130,7 @@ class Track:
                     duration=metadata.get("duration"),
                     requested_by=requested_by,
                 )
-        except Exception as _:
+        except KeyError:
             logger.error("Incomplete data returned, missing URL")
             raise RuntimeError("yt-dlp returned incomplete data")
 
@@ -149,17 +155,19 @@ class Track:
                     stdout=PIPE,
                     stderr=PIPE,
                 )
-            except Exception as e:
+            except Exception:
                 logging.getLogger("yt-dlp").exception("Failed to start yt-dlp")
-                raise e
+                raise
+
+            assert process.stderr
 
             if err := (await process.stderr.read()).decode("utf-8"):
-                return (await err.read()).decode("utf-8")
+                return err
 
             assert process.stdout is not None
             result = json.loads((await process.stdout.read()).decode("utf-8"))
             self.streaming_url = result["url"]
-            
+
         assert self.streaming_url is not None
         real_source = FFmpegPCMAudio(self.streaming_url)
         source = SeekableAudioSource(real_source)
@@ -176,7 +184,7 @@ class Track:
             return self.memoized_stream, None
 
         if err := await self.fetch_source():
-            return (None ,err) 
+            return (None, err)
 
         assert self.memoized_stream is not None
         self.already_played = False
@@ -213,13 +221,16 @@ class MusicPlaying(commands.Cog):
         backreport_channel: TextChannel
         voice_client: VoiceClient
 
-        history: Deque[Track] = attrib(init=False, factory=Deque)
+        history: deque[Track] = attrib(init=False, factory=deque)
         now_playing: Track | None = attrib(init=False, default=None)
-        queue: Deque[Track] = attrib(init=False, factory=Deque)
+        queue: deque[Track] = attrib(init=False, factory=deque)
         queue_lock: aio.Lock = attrib(init=False, factory=aio.Lock)
         player_task: aio.Task[None] | None = attrib(init=False, default=None)
         next_song_event: aio.Event = attrib(init=False, factory=aio.Event)
-        cur_source: SeekableAudioSource | None = attrib(init=False, default=None)
+        cur_source: SeekableAudioSource | None = attrib(
+                                                init=False,
+                                                default=None
+                                                )
 
         loop_mode: LoopMode = attrib(init=False, default=LoopMode.NoLoop)
         is_shuffle: bool = attrib(init=False, default=False)
@@ -230,7 +241,6 @@ class MusicPlaying(commands.Cog):
 
         def on_song_end_cb(self, err):
             loop = self.bot.loop
-
 
             def _handle_end():
                 self.now_playing = None
@@ -245,14 +255,14 @@ class MusicPlaying(commands.Cog):
                     self.logger.error(f"Err on play: {err}")
 
                     aio.create_task(
-                        self.backreport_channel.send(f"Error during play: {err}")
+                        self.backreport_channel.send(
+                            f"Error during play: {err}"
+                            )
                     )
                     aio.create_task(self.stop())
                     aio.create_task(self.disconnect())
 
             loop.call_soon_threadsafe(_handle_end)
-
-
 
         async def song_player_task(self):
             """
@@ -265,12 +275,14 @@ class MusicPlaying(commands.Cog):
                     return
                 async with self.queue_lock:
                     next_track = self.queue.popleft()
-                
                 try:
-                    source,err = await next_track.get_stream()
+                    source, err = await next_track.get_stream()
+                # TODO: limit the exeptions to satisfy linter BLE001
                 except Exception as e:
                     await self.backreport_channel.send(
-                        f"Unable to obtain audio for {next_track.title} ({next_track.webpage_url}), error: {e}, skipping..."
+                        f"Unable to obtain audio for {
+                            next_track.title
+                        } ({next_track.webpage_url}), error: {e}, skipping..."
                     )
                     continue
                 else:
@@ -289,17 +301,23 @@ class MusicPlaying(commands.Cog):
                 )
                 self.now_playing = next_track
                 self.history.append(next_track)
-                
+
                 await self.backreport_channel.send(
-                    f"Playing {next_track.title} ({next_track.webpage_url}), requested by {next_track.requested_by.display_name}."
+                    f"Playing {
+                        next_track.title
+                        } ({
+                        next_track.webpage_url
+                        }), requested by {
+                        next_track.requested_by.display_name
+                        }."
                 )
-                
+
                 prefetch_track = None
                 if self.queue:
                     async with self.queue_lock:
                         prefetch_track = self.queue[0]
                         aio.create_task(prefetch_track.fetch_source())
-                
+
                 await self.next_song_event.wait()
                 next_track.already_played = True
                 self.next_song_event.clear()
@@ -340,7 +358,11 @@ class MusicPlaying(commands.Cog):
         async def disconnect(self):
             aio.create_task(self.voice_client.disconnect(force=True))
 
-    guild_players: Dict[int, Player] = attrib(init=False, factory=dict, hash=False)
+    guild_players: dict[int, Player] = attrib(
+                                            init=False,
+                                            factory=dict,
+                                            hash=False
+                                            )
 
     def get_player(self, guild: Guild):
         if guild.id not in self.guild_players:
@@ -354,7 +376,7 @@ class MusicPlaying(commands.Cog):
 
     async def vc_guard(
         self, ctx: commands.Context
-    ) -> Tuple[Member, TextChannel, "MusicPlaying.Player"] | None:
+    ) -> tuple[Member, TextChannel, "MusicPlaying.Player"] | None:
         assert ctx.guild is not None
 
         invoker = ctx.author
@@ -365,7 +387,7 @@ class MusicPlaying(commands.Cog):
 
         try:
             player = self.get_player(ctx.guild)
-        except Exception as _:
+        except ValueError:
             await text_channel.send("Must join first.")
             return None
 
@@ -390,8 +412,11 @@ class MusicPlaying(commands.Cog):
             await text_channel.send("You must be in a voice channel!")
             return
         try:
-            voice_client = await voice_channel.connect(timeout=5.0, reconnect=True)
-        except aio.TimeoutError:
+            voice_client = await voice_channel.connect(
+                                                    timeout=5.0,
+                                                    reconnect=True
+                                                    )
+        except TimeoutError:
             # Log timeout error here
             self.logger().error("Timeout error when trying to join VC.")
             return
@@ -399,7 +424,11 @@ class MusicPlaying(commands.Cog):
             return
 
         if ctx.guild.id not in self.guild_players:
-            new_player = self.Player(ctx.bot, ctx.guild, text_channel, voice_client)
+            new_player = self.Player(
+                    ctx.bot,
+                    ctx.guild,
+                    text_channel,
+                    voice_client)
             self.guild_players[ctx.guild.id] = new_player
 
     @commands.command()
@@ -416,10 +445,11 @@ class MusicPlaying(commands.Cog):
 
         try:
             player = self.get_player(ctx.guild)
-        except Exception as _:
+        except ValueError:
             if ctx.guild.voice_client is not None:
                 await text_channel.send(
-                    "Leaving VC even though we should not be present there to begin with... this is a bug"
+                    "Leaving VC even though we should not"
+                    " be present there to begin with... this is a bug"
                 )
                 await ctx.guild.voice_client.disconnect(force=True)
             else:
@@ -445,6 +475,8 @@ class MusicPlaying(commands.Cog):
 
         try:
             result = await Track.try_from_url(url, invoker)
+
+        # TODO: limit the exeptions to satisfy linter BLE001
         except Exception as e:
             await text_channel.send(f"Failed to add song to queue: {e}.")
             return
@@ -455,7 +487,11 @@ class MusicPlaying(commands.Cog):
             await player.start()
 
             await text_channel.send(
-                f"Added {len(result)} songs to the queue, requested by {invoker.display_name}."
+                f"Added {
+                    len(result)
+                } songs to the queue, requested by {
+                    invoker.display_name
+                }."
             )
         else:
             async with player.queue_lock:
@@ -463,7 +499,11 @@ class MusicPlaying(commands.Cog):
             await player.start()
 
             await text_channel.send(
-                f"Added {result.title} to the queue, requested by {invoker.display_name}"
+                f"Added {
+                    result.title
+                    } to the queue, requested by {
+                        invoker.display_name
+                    }"
             )
 
     @commands.command(aliases=["pn"])
@@ -479,20 +519,24 @@ class MusicPlaying(commands.Cog):
 
         try:
             result = await Track.try_from_url(url, invoker)
+
+        # TODO: limit the exeptions to satisfy linter BLE001
         except Exception as e:
             await text_channel.send(f"Failed to add song to queue: {e}.")
             return
 
         if isinstance(result, Sequence):
             await text_channel.send(
-                f"Added {len(result)} songs to the queue to play next, requested by {invoker.display_name}."
+                f"Added {len(result)} songs to the"
+                f" queue to play next, requested by {invoker.display_name}."
             )
             async with player.queue_lock:
                 player.queue.extendleft(result)
             await player.start()
         else:
             await text_channel.send(
-                f"Added {result.title} to the queue to play next, requested by {invoker.display_name}"
+                f"Added {result.title} to the"
+                f" queue to play next, requested by {invoker.display_name}"
             )
             async with player.queue_lock:
                 player.queue.appendleft(result)
@@ -569,13 +613,13 @@ class MusicPlaying(commands.Cog):
                     if skip_from < 0:
                         raise ValueError
                     skip_to = skip_from + 1
-                except Exception as _:
+                except ValueError:
                     skip_from, skip_to = map(int, to_skip_str.split("-"))
                     if skip_from < 1 or skip_to < 1 or skip_from >= skip_to:
                         raise ValueError
                     skip_from -= 1
                     skip_to += 1
-        except Exception as _:
+        except ValueError:
             await text_channel.send("Invalid argument")
             return
 
@@ -588,13 +632,13 @@ class MusicPlaying(commands.Cog):
             try:
                 if skip_to != -1:
                     del new_queue[skip_from:skip_to]
-            except Exception as _:
+            except TypeError:
                 await text_channel.send("Trying to skip non-existent entries")
                 return
             player.voice_client.stop()
             player.queue.clear()
             player.queue.extend(new_queue)
-            
+
             if skip_from == 0:
                 # We've skipped current song
                 player.next_song_event.set()
@@ -635,7 +679,8 @@ class MusicPlaying(commands.Cog):
             return
 
         player.cur_source.volume = min(max(0, volume / 100), 2)
-        await text_channel.send(f"Volume set to {player.cur_source.volume:.0%}")
+        await text_channel.send("Volume set to"
+                                f" {player.cur_source.volume:.0%}")
 
     @commands.command()
     @commands.guild_only()
@@ -643,7 +688,7 @@ class MusicPlaying(commands.Cog):
         self,
         ctx: commands.Context,
         *,
-        mode: Literal["off"] | Literal["current"] | Literal["queue"],
+        mode: Literal["off", "current", "queue"],
     ):
         """Set looping mode. Values are off, current and queue."""
         assert ctx.guild is not None
@@ -692,12 +737,17 @@ class MusicPlaying(commands.Cog):
         else:
             dur_string = f"{datetime.timedelta(seconds=int(maybe_dur))}"
             if maybe_dur < 3600:
-                time_string = f"{played_time_str.removeprefix('0:')}/{dur_string.removeprefix('0:')}"
+                time_string = f"{
+                                  played_time_str.removeprefix('0:')
+                                }/{
+                                  dur_string.removeprefix('0:')
+                                }"
             else:
                 time_string = f"{played_time_str}/{dur_string}"
 
         await text_channel.send(
-            f"Now playing {player.now_playing.title} ({time_string}), requested by {player.now_playing.requested_by.display_name}."
+            f"Now playing {player.now_playing.title} ({time_string})"
+            f", requested by {player.now_playing.requested_by.display_name}."
         )
 
     @commands.command(aliases=["q"])
@@ -720,21 +770,28 @@ class MusicPlaying(commands.Cog):
 
         def make_queue_line(track: Track, track_num: int) -> str:
             if track.duration:
-                dur_string = dur_string = (
+                dur_string = (
                     f"{datetime.timedelta(seconds=int(track.duration))}"
                 )
                 if track.duration < 3600:
                     dur_string = dur_string.removeprefix("0:")
 
-                return f"{track_num + per_page * page}: [{track.title}]({track.webpage_url}) ~ {dur_string} ~ {track.requested_by.mention}"
+                return (f"{track_num + per_page * page}: [{track.title}]"
+                        f"({track.webpage_url}) ~ {dur_string} ~ "
+                        f"{track.requested_by.mention}")
 
-            return f"{track_num + per_page * page}: [{track.title}]({track.webpage_url}) ~ {track.requested_by.mention}"
+            return (f"{track_num + per_page * page}: [{track.title}]"
+                    f"({track.webpage_url}) ~ {track.requested_by.mention}")
 
         _embed = ReplyEmbed(
                 title="Queue"
                 ).add_field(
                         name="",
-                        value=f"page: {page}/{max(ceil(len(player.queue) / per_page),1)}",
+                        value=f"page: {
+                          page
+                        }/{
+                          max(ceil(len(player.queue) / per_page), 1)
+                        }",
                         )
 
         if page == 1 and player.now_playing is not None:
@@ -749,7 +806,7 @@ class MusicPlaying(commands.Cog):
 
             start_indx = 10 * (page - 1)
             for i, track in enumerate(
-                queue_list[start_indx : start_indx + 10], start=1
+                queue_list[start_indx: start_indx + 10], start=1
             ):
                 queue_text_segments.append(make_queue_line(track, i))
 
@@ -773,7 +830,6 @@ class MusicPlaying(commands.Cog):
         else:
             return
 
-
         page = 1 if page is None else page
         if page < 1:
             await text_channel.send("Invalid page number.")
@@ -785,7 +841,8 @@ class MusicPlaying(commands.Cog):
                 title="Song History"
                 )
 
-        _history = list(reversed(player.history)) # delta made history upside down
+        # delta made history upside down
+        _history = list(reversed(player.history))
         # empty check
         if len(_history) == 0:
             await text_channel.send(embed=ReplyEmbed(title="emty!!"))
@@ -793,14 +850,22 @@ class MusicPlaying(commands.Cog):
 
         _desc = ""
 
-        for i, track in enumerate(_history[page*HISTORY_LENGTH:page*HISTORY_LENGTH+HISTORY_LENGTH]):
-            # add a field for each song between page * defined length to page * defined length + 10
-            _desc += f"{"current" if i == 0 else i}: [{track.title}]({track.webpage_url})\n"
-
+        for i, track in enumerate(
+                _history[
+                    page*HISTORY_LENGTH:page*HISTORY_LENGTH+HISTORY_LENGTH
+                    ]
+                ):
+            # add a field for each song between page * defined length
+            # to page * defined length + 10
+            _desc += f"{
+              "current" if i == 0 else i
+            }: [{track.title}]({track.webpage_url})\n"
 
         if len(_history) > page*HISTORY_LENGTH+HISTORY_LENGTH:
             # description will be number off songs after this page
-            _desc += f"and {len(_history) - page*HISTORY_LENGTH+HISTORY_LENGTH} more!"
+            _desc += f"and {
+                  len(_history) - page*HISTORY_LENGTH+HISTORY_LENGTH
+                } more!"
 
         historyEmbed.set_description(_desc)
 
@@ -818,8 +883,11 @@ class MusicPlaying(commands.Cog):
         async with player.queue_lock:
             random.shuffle(player.queue)
 
-        await text_channel.send(embed=ReplyEmbed(description="Shuffled songs in the queue"))
-
+        await text_channel.send(
+                embed=ReplyEmbed(
+                    description="Shuffled songs in the queue"
+                    )
+                )
 
     @commands.command()
     @commands.guild_only()
@@ -837,7 +905,6 @@ class MusicPlaying(commands.Cog):
         while next_ := response.read(2000):
             await text_channel.send(next_)
 
-
     @commands.command()
     @commands.guild_only()
     async def debug2(self, ctx: commands.Context):
@@ -852,7 +919,9 @@ class MusicPlaying(commands.Cog):
 
     @commands.command()
     async def version(self, ctx: commands.Context):
-        process = await create_subprocess_exec("yt-dlp", "--version", stdout=PIPE, stderr=PIPE)
+        process = await create_subprocess_exec(
+                  "yt-dlp", "--version", stdout=PIPE, stderr=PIPE
+                )
         assert process.stdout is not None
         await ctx.reply((await process.stdout.read()).decode("utf-8"))
 
